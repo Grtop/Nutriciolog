@@ -252,6 +252,8 @@ async def generate_menu(gender: str, age: int, weight: float, height: float, act
     date = now.strftime('%d.%m.%Y')
     
     prompt = f"""
+        Действуй как провессиональный врач-диетолог и нутрициолог. 
+        Информация должна содержать только меню и список продуктов.
         Создай меню на день для {gender}, {age} лет, вес {weight} кг, рост {height} см, активность: {activity}, цель: {goal}. Жирным шрифтом 14 pt: Сегодня {day_of_week}, {date}. Жирным шрифтом 14 pt: Калории: {int(calories_dict['daily_calories'])}.
 
         Сгенерируй в формате HTML для печати: шрифт 12 pt, умести на одном листе A4 (портрет, margins 1cm, без лишних слов), текст меню должен начинаться с даты. 
