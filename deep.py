@@ -4,8 +4,8 @@ import os
 import asyncio
 import logging
 import aiohttp
+import json
 import ssl
-import base64
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.context import FSMContext
@@ -17,15 +17,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-GIGACHAT_CLIENT_ID = os.getenv('GIGACHAT_CLIENT_ID')
-GIGACHAT_CLIENT_SECRET = os.getenv('GIGACHAT_CLIENT_SECRET')
-GIGACHAT_SCOPE = os.getenv('GIGACHAT_SCOPE', 'GIGACHAT_API_PERS')
-
-# Кэш для токена
-gigachat_token_cache = {
-    "access_token": None,
-    "expires_at": 0
-}
+DEEPSEEK_API_KEY = os.getenv('DEEPSEEK_API_KEY')
 
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
@@ -60,110 +52,6 @@ main_menu = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True
 )
-
-async def get_gigachat_access_token() -> str:
-    """Получаем access token для GigaChat API"""
-    global gigachat_token_cache
-    
-    # Проверяем, есть ли валидный токен в кэше
-    if gigachat_token_cache["access_token"] and gigachat_token_cache["expires_at"] > asyncio.get_event_loop().time():
-        return gigachat_token_cache["access_token"]
-    
-    if not GIGACHAT_CLIENT_ID or not GIGACHAT_CLIENT_SECRET:
-        logging.error("GigaChat credentials not configured")
-        return None
-    
-    # Кодируем client_id:client_secret в base64
-    credentials = base64.b64encode(
-        f"{GIGACHAT_CLIENT_ID}:{GIGACHAT_CLIENT_SECRET}".encode()
-    ).decode()
-    
-    url = "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
-    
-    headers = {
-        "Authorization": f"Basic {credentials}",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept": "application/json"
-    }
-    
-    data = {
-        "scope": GIGACHAT_SCOPE
-    }
-    
-    try:
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
-        
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.post(url, headers=headers, data=data, timeout=30) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    access_token = result.get('access_token')
-                    expires_in = result.get('expires_in', 1800)  # 30 минут по умолчанию
-                    
-                    # Сохраняем токен в кэш
-                    gigachat_token_cache["access_token"] = access_token
-                    gigachat_token_cache["expires_at"] = asyncio.get_event_loop().time() + expires_in - 60  # минус 60 секунд для запаса
-                    
-                    logging.info("GigaChat token obtained successfully")
-                    return access_token
-                else:
-                    error_text = await response.text()
-                    logging.error(f"GigaChat auth error: {response.status} - {error_text}")
-                    return None
-                    
-    except Exception as e:
-        logging.error(f"GigaChat auth error: {e}")
-        return None
-
-async def generate_with_gigachat(prompt: str) -> str:
-    """Функция для запроса к GigaChat API"""
-    # Получаем access token
-    access_token = await get_gigachat_access_token()
-    
-    if not access_token:
-        return "Ошибка: Не удалось получить доступ к GigaChat API"
-    
-    url = "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
-    
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json"
-    }
-    
-    data = {
-        "model": "GigaChat",
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 2000,
-        "temperature": 0.7,
-        "stream": False
-    }
-    
-    try:
-        connector = aiohttp.TCPConnector(ssl=ssl_context)
-        
-        async with aiohttp.ClientSession(connector=connector) as session:
-            async with session.post(url, headers=headers, json=data, timeout=60) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    return result['choices'][0]['message']['content']
-                else:
-                    error_text = await response.text()
-                    logging.error(f"GigaChat API error: {response.status} - {error_text}")
-                    
-                    # Если токен просрочен, очищаем кэш и пробуем снова
-                    if response.status == 401:
-                        gigachat_token_cache["access_token"] = None
-                        return await generate_with_gigachat(prompt)
-                    
-                    return f"Ошибка API: {response.status}"
-                    
-    except asyncio.TimeoutError:
-        logging.error("GigaChat API timeout")
-        return "Таймаут запроса к AI"
-    except Exception as e:
-        logging.error(f"GigaChat error: {e}")
-        return f"Ошибка: {str(e)}"
 
 @router.message(Command("start"))
 async def start(message: types.Message):
@@ -334,129 +222,99 @@ async def calc_calories(message: types.Message):
     
     await message.answer(f"Примерная суточная норма: {int(daily_calories)} ккал.")
 
-async def generate_local_menu(user_data: dict) -> str:
-    """Локальная генерация меню на основе данных пользователя"""
-    gender = user_data.get("gender", "мужчина")
-    age = user_data.get("age", 30)
-    weight = user_data.get("weight", 70)
-    height = user_data.get("height", 175)
-    activity = user_data.get("activity", "средний")
+async def generate_with_deepseek(prompt: str) -> str:
+    """Функция для запроса к DeepSeek API"""
+    if not DEEPSEEK_API_KEY:
+        return "Ошибка: API ключ не настроен"
+    
+    url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    
+    data = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1500,
+        "temperature": 0.7,
+        "stream": False
+    }
+    
+    try:
+        # Используем кастомный SSL контекст для обхода ошибки сертификата
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        
+        async with aiohttp.ClientSession(connector=connector) as session:
+            async with session.post(url, headers=headers, json=data, timeout=60) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result['choices'][0]['message']['content']
+                else:
+                    error_text = await response.text()
+                    logging.error(f"DeepSeek API error: {response.status} - {error_text}")
+                    return f"Ошибка API: {response.status}"
+                    
+    except asyncio.TimeoutError:
+        logging.error("DeepSeek API timeout")
+        return "Таймаут запроса к AI"
+    except Exception as e:
+        logging.error(f"DeepSeek error: {e}")
+        return f"Ошибка: {str(e)}"
+
+async def generate_fallback_menu(user_data: dict) -> str:
+    """Резервное меню на случай ошибок API"""
     goal = user_data.get("goal", "поддерживать форму")
     
-    # Расчет калорий
-    if gender == "мужчина":
-        bmr = 10 * weight + 6.25 * height - 5 * age + 5
-    else:
-        bmr = 10 * weight + 6.25 * height - 5 * age - 161
-    
-    activity_coeffs = {"низкий": 1.2, "средний": 1.55, "высокий": 1.725}
-    tdee = bmr * activity_coeffs.get(activity, 1.2)
-    
-    if goal == "похудеть":
-        daily_calories = tdee - 500
-    elif goal == "набрать массу":
-        daily_calories = tdee + 500
-    else:
-        daily_calories = tdee
-    
-    # Генерация меню на основе цели
-    if goal == "похудеть":
-        menu = f"""
-🥗 ПЕРСОНАЛИЗИРОВАННОЕ МЕНЮ ДЛЯ ПОХУДЕНИЯ
-👤 {gender}, {age} лет, {weight}кг, {height}см
-🔥 Активность: {activity}
-🎯 Цель: {goal}
+    menus = {
+        "похудеть": """
+🥗 Меню для похудения (≈1200-1400 ккал):
 
-📊 СУТОЧНАЯ НОРМА: {int(daily_calories)} ккал
+🍳 ЗАВТРАК (300 ккал):
+• Овсянка на воде 50г + ягоды 100г
+• Белки: 12г, Жиры: 5г, Углеводы: 45г
 
-🍳 ЗАВТРАК (300-350 ккал):
-• Овсяная каша на воде 50г + ягоды 100г + мед 1 ч.л.
-• Или: Омлет из 2 яиц + овощной салат
-• Белки: 15-20г, Углеводы: 40-50г
+🍲 ОБЕД (400 ккал):
+• Куриная грудка 150г + гречка 100г + овощной салат
+• Б: 35г, Ж: 8г, У: 45г
 
-🍲 ОБЕД (400-450 ккал):
-• Куриная грудка 150г + гречка 100г + свежие овощи
-• Или: Рыба на пару 150г + бурый рис 80г + тушеные овощи
-• Белки: 30-35г, Углеводы: 45-55г
+🥗 УЖИН (350 ккал):
+• Рыба на пару 150г + тушеные овощи 200г
+• Б: 25г, Ж: 10г, У: 20г
 
-🥗 УЖИН (300-350 ккал):
-• Творог 5% 150г + овощной салат
-• Или: Запеченная индейка 120г + овощи на гриле
-• Белки: 25-30г, Углеводы: 15-20г
-
-🍎 ПЕРЕКУСЫ (150-200 ккал каждый):
+🍎 ПЕРЕКУСЫ (150-250 ккал):
 • Яблоко + греческий йогурт 100г
 • Горсть орехов (20г)
-• Овощные палочки с хумусом
+""",
+        "набрать массу": """
+💪 Меню для набора массы (≈2500-3000 ккал):
 
-💧 Пейте 2-2.5 литра воды в день!
+🍳 ЗАВТРАК (600 ккал):
+• Омлет из 3 яиц + сыр 50г + цельнозерновой хлеб
+• Б: 35г, Ж: 25г, У: 60г
+
+🍲 ОБЕД (700 ккал):
+• Говядина 200г + рис 150г + овощи на гриле
+• Б: 45г, Ж: 20г, У: 80г
+
+🍗 УЖИН (500 ккал):
+• Творог 200г + банан + орехи 30г
+• Б: 35г, Ж: 15г, У: 40г
+
+🥛 ПЕРЕКУСЫ (700 ккал):
+• Протеиновый коктейль (молоко + протеин)
+• Бутерброд с арахисовой пастой
 """
+    }
     
-    elif goal == "набрать массу":
-        menu = f"""
-💪 ПЕРСОНАЛИЗИРОВАННОЕ МЕНЮ ДЛЯ НАБОРА МАССЫ
-👤 {gender}, {age} лет, {weight}кг, {height}см
-🔥 Активность: {activity}
-🎯 Цель: {goal}
+    return menus.get(goal, """
+⚖️ Сбалансированное меню (≈1800-2000 ккал):
 
-📊 СУТОЧНАЯ НОРМА: {int(daily_calories)} ккал
-
-🍳 ЗАВТРАК (600-700 ккал):
-• Овсянка на молоке 80г + банан + орехи 30г + мед
-• Или: Яичница из 3 яиц + сыр 50г + цельнозерновой хлеб
-• Белки: 30-35г, Углеводы: 80-90г
-
-🍲 ОБЕД (700-800 ккал):
-• Говядина 200г + рис 150г + овощной салат с оливковым маслом
-• Или: Лосось 180г + картофель 200г + тушеные овощи
-• Белки: 40-45г, Углеводы: 90-100г
-
-🍗 УЖИН (500-600 ккал):
-• Куриные грудки 200г + гречка 120г + авокадо
-• Или: Творог 9% 200г + фрукты + орехи 20г
-• Белки: 35-40г, Углеводы: 50-60г
-
-🥛 ПЕРЕКУСЫ (300-400 ккал каждый):
-• Протеиновый коктейль (молоко + протеин + банан)
-• Бутерброды с арахисовой пастой
-• Сырники с медом
-
-💪 Силовые тренировки 3-4 раза в неделю!
-"""
-    
-    else:  # поддерживать форму
-        menu = f"""
-⚖️ ПЕРСОНАЛИЗИРОВАННОЕ СБАЛАНСИРОВАННОЕ МЕНЮ
-👤 {gender}, {age} лет, {weight}кг, {height}см
-🔥 Активность: {activity}
-🎯 Цель: {goal}
-
-📊 СУТОЧНАЯ НОРМА: {int(daily_calories)} ккал
-
-🍳 ЗАВТРАК (400-500 ккал):
-• Творог 5% 150г + фрукты 100г + мед 1 ч.л.
-• Или: Овсянка на молоке 60г + ягоды + орехи 20г
-• Белки: 20-25г, Углеводы: 60-70г
-
-🍲 ОБЕД (500-600 ккал):
-• Индейка 150г + киноа 100г + овощной салат
-• Или: Рыба 170г + булгур 120г + тушеные овощи
-• Белки: 35-40г, Углеводы: 70-80г
-
-🥗 УЖИН (400-450 ккал):
-• Запеченная курица 150г + овощи на гриле
-• Или: Морепродукты 180г + салат из свежих овощей
-• Белки: 30-35г, Углеводы: 30-40г
-
-🍎 ПЕРЕКУСЫ (200-250 ккал каждый):
-• Йогурт + горсть ягод
-• Орехи + сухофрукты (30г)
-• Овощные палочки с гуакамоле
-
-🚴 Поддерживайте активность каждый день!
-"""
-    
-    return menu
+🍳 Завтрак: Творог 150г с фруктами (350 ккал)
+🍲 Обед: Курица 150г с рисом и овощами (500 ккал) 
+🥗 Ужин: Рыба 150г с салатом (400 ккал)
+🍎 Перекусы: Орехи, йогурт, фрукты (550 ккал)
+""")
 
 @router.message(F.text == "3. Расчет меню питания")
 async def generate_menu(message: types.Message):
@@ -467,6 +325,7 @@ async def generate_menu(message: types.Message):
         await message.answer("Сначала заполните данные в опции 1.")
         return
     
+    # Показываем что бот думает
     await message.answer("🍽️ Генерирую персонализированное меню...")
     
     gender = data.get("gender", "мужчина")
@@ -492,38 +351,38 @@ async def generate_menu(message: types.Message):
     else:
         daily_calories = tdee
     
-    # Промпт для GigaChat
+    # Промпт для DeepSeek
     prompt = f"""
 Создай подробное персонализированное меню питания на 1 день для {gender}, {age} лет, вес {weight} кг, рост {height} см, уровень активности: {activity}, цель: {goal}. 
 
 Общая калорийность: около {int(daily_calories)} ккал.
 
-Включи российские продукты и блюда:
-1. Завтрак (каша, омлет, творог)
-2. Обед (суп, второе с гарниром)  
-3. Ужин (рыба/мясо с овощами)
+Включи:
+1. Завтрак
+2. Обед  
+3. Ужин
 4. 2 перекуса
 
 Для каждого приема пищи укажи:
-- Конкретные блюда и российские продукты
-- Вес порций в граммах
+- Конкретные блюда и продукты
+- Примерный вес порций в граммах
 - Калорийность приема пищи
 - БЖУ (белки, жиры, углеводы в граммах)
-- Простые рецепты приготовления
+- Краткое описание приготовления
 
-Сделай меню сбалансированным, полезным и практичным для приготовления в домашних условиях.
+Сделай меню сбалансированным, полезным и практичным для приготовления в домашних условиях. Учитывай российские продукты и привычки питания.
 """
     
-    # Сначала пробуем GigaChat
-    menu_text = await generate_with_gigachat(prompt)
+    # Генерация меню через DeepSeek
+    menu_text = await generate_with_deepseek(prompt)
     
-    # Если GigaChat не ответил, используем локальную генерацию
+    # Если AI не ответил, используем резервное меню
     if menu_text.startswith("Ошибка") or menu_text.startswith("Таймаут"):
-        logging.warning(f"GigaChat не ответил, используем локальное меню. Ошибка: {menu_text}")
-        menu_text = await generate_local_menu(data)
+        logging.warning(f"AI не ответил, используем резервное меню. Ошибка: {menu_text}")
+        menu_text = await generate_fallback_menu(data)
         response = f"⚠️ Используем шаблонное меню:\n\n{menu_text}"
     else:
-        response = f"🍽️ Ваше персонализированное меню (сгенерировано GigaChat):\n\n{menu_text}"
+        response = f"🍽️ Ваше персонализированное меню:\n\n{menu_text}"
     
     # Разбиваем длинное сообщение на части (ограничение Telegram)
     if len(response) > 4000:

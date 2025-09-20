@@ -1,0 +1,13 @@
+# Для Flask-приложения
+Flask>=3.0.0
+pandas>=2.1.0
+matplotlib>=3.8.0
+scikit-learn>=1.3.0
+requests>=2.31.0
+openpyxl>=3.1.0
+psycopg2-binary>=2.9.0
+
+# Для Telegram-бота
+aiogram>=3.0.0
+openai>=1.0.0
+python-dotenv>=1.0.0

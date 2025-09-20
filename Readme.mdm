@@ -1,0 +1,4 @@
+nutrition_bot/
+├── main.py          # Основной код бота
+├── .env             # Файл с токенами (не коммить в Git!)
+└── requirements.txt # Зависимости
